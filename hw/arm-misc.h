@@ -20,7 +20,7 @@ qemu_irq *arm_pic_init_cpu(CPUARMState *env);
 
 /* armv7m.c */
 qemu_irq *armv7m_init(MemoryRegion *address_space_mem,
-                      int flash_size, int sram_size,
+                      int flash_size, int sram_size, target_phys_addr_t sram_start,
                       const char *kernel_filename, const char *cpu_model);
 
 /* arm_boot.c */
