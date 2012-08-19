@@ -325,6 +325,13 @@ static uint32_t gic_dist_readb(void *opaque, target_phys_addr_t offset)
     int cm;
     int mask;
 
+#ifdef NVIC
+    uint32_t addr;
+    addr = offset;
+    if (addr >= 0xd00 && addr != 0xf00) {
+        return nvic_readb(s, addr);
+    }
+#endif
     cpu = gic_get_current_cpu(s);
     cm = 1 << cpu;
     if (offset < 0x100) {
@@ -444,7 +451,7 @@ static uint32_t gic_dist_readl(void *opaque, target_phys_addr_t offset)
     gic_state *s = (gic_state *)opaque;
     uint32_t addr;
     addr = offset;
-    if (addr < 0x100 || addr > 0xd00)
+    if (addr < 0x100 || addr >= 0xd00)
         return nvic_readl(s, addr);
 #endif
     val = gic_dist_readw(opaque, offset);
@@ -460,6 +467,14 @@ static void gic_dist_writeb(void *opaque, target_phys_addr_t offset,
     int i;
     int cpu;
 
+#ifdef NVIC
+    uint32_t addr;
+    addr = offset;
+    if (addr >= 0xd00 && addr != 0xf00) {
+        nvic_writeb(s, addr, value);
+        return;
+    }
+#endif
     cpu = gic_get_current_cpu(s);
     if (offset < 0x100) {
 #ifdef NVIC
@@ -612,7 +627,7 @@ static void gic_dist_writel(void *opaque, target_phys_addr_t offset,
 #ifdef NVIC
     uint32_t addr;
     addr = offset;
-    if (addr < 0x100 || (addr > 0xd00 && addr != 0xf00)) {
+    if (addr < 0x100 || (addr >= 0xd00 && addr != 0xf00)) {
         nvic_writel(s, addr, value);
         return;
     }

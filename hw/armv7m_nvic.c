@@ -17,7 +17,9 @@
 
 #define NVIC 1
 
+static uint32_t nvic_readb(void *opaque, uint32_t offset);
 static uint32_t nvic_readl(void *opaque, uint32_t offset);
+static void nvic_writeb(void *opaque, uint32_t offset, uint32_t value);
 static void nvic_writel(void *opaque, uint32_t offset, uint32_t value);
 
 #include "arm_gic.c"
@@ -115,15 +117,37 @@ void armv7m_nvic_complete_irq(void *opaque, int irq)
     gic_complete_irq(&s->gic, 0, irq);
 }
 
+int armv7m_nvic_get_priority(void *opaque, int irq)
+{
+    gic_state *s = &((nvic_state *)opaque)->gic;
+    if (irq >= 16)
+        irq += 16;
+    return GIC_GET_PRIORITY(irq, gic_get_current_cpu(s));
+}
+
+int armv7m_nvic_get_current_pending(void* opaque)
+{
+    gic_state *s = &((nvic_state *)opaque)->gic;
+    int irq = s->current_pending[gic_get_current_cpu(s)];
+    if (irq >= 32)
+        irq -= 16;
+    return irq;
+}
+
 static uint32_t nvic_readl(void *opaque, uint32_t offset)
 {
     nvic_state *s = (nvic_state *)opaque;
+    CPUArchState *first_cpu = qemu_get_cpu(0);
     uint32_t val;
     int irq;
 
     switch (offset) {
     case 4: /* Interrupt Control Type.  */
+#if 0
         return (s->num_irq / 32) - 1;
+#else
+        return ((s->num_irq - GIC_BASE_IRQ) / 32) - 1;
+#endif
     case 0x10: /* SysTick Control and Status.  */
         val = s->systick.control;
         s->systick.control &= ~SYSTICK_COUNTFLAG;
@@ -147,9 +171,15 @@ static uint32_t nvic_readl(void *opaque, uint32_t offset)
             return val;
         }
     case 0x1c: /* SysTick Calibration Value.  */
+#if 0
         return 10000;
+#else
+        return 0;
+#endif
     case 0xd00: /* CPUID Base.  */
-        return cpu_single_env->cp15.c0_cpuid;
+        if (first_cpu)
+            return first_cpu->cp15.c0_cpuid;
+        return 0;
     case 0xd04: /* Interrypt Control State.  */
         /* VECTACTIVE */
         val = s->gic.running_irq[0];
@@ -317,7 +347,8 @@ static void nvic_writel(void *opaque, uint32_t offset, uint32_t value)
         }
         break;
     case 0xd08: /* Vector Table Offset.  */
-        cpu_single_env->v7m.vecbase = value & 0xffffff80;
+        if (first_cpu)
+            first_cpu->v7m.vecbase = value & 0xffffff80;
         break;
     case 0xd0c: /* Application Interrupt/Reset Control.  */
         if ((value >> 16) == 0x05fa) {
@@ -330,9 +361,10 @@ static void nvic_writel(void *opaque, uint32_t offset, uint32_t value)
         }
         break;
     case 0xd10: /* System Control.  */
-    case 0xd14: /* Configuration Control.  */
         /* TODO: Implement control registers.  */
         goto bad_reg;
+    case 0xd14: /* Configuration Control.  */
+        break;
     case 0xd18: case 0xd1c: case 0xd20: /* System Handler Priority.  */
         {
             int irq;
@@ -362,6 +394,38 @@ static void nvic_writel(void *opaque, uint32_t offset, uint32_t value)
     bad_reg:
         hw_error("NVIC: Bad write offset 0x%x\n", offset);
     }
+}
+
+static uint32_t nvic_readb(void *opaque, uint32_t offset)
+{
+    nvic_state *s = (nvic_state *)opaque;
+    uint32_t retval = 0;
+    uint32_t offset_base = ((offset + 4) & ~3) - 4;
+
+    if (offset < 0xd00) {
+        printf("%s: offset = %x\n", __func__, offset);
+        return 0;
+    }
+    retval = (nvic_readl(s, offset_base) >> (8 * (offset - offset_base))) & 0xff;
+    return retval;
+}
+
+static void nvic_writeb(void *opaque, uint32_t offset, uint32_t value)
+{
+    nvic_state *s = (nvic_state *)opaque;
+    uint32_t offset_base = ((offset + 4) & ~3) - 4;
+    uint32_t tmp;
+    uint32_t shift;
+
+    if (offset < 0xd00) {
+        printf("%s: offset = %x\n", __func__, offset);
+        return;
+    }
+
+    shift = (8 * (offset - offset_base));
+    tmp = nvic_readl(s, offset_base) & ~(0xff << shift);
+    tmp |= (value & 0xff) << shift;
+    nvic_writel(s, offset_base, tmp);
 }
 
 static const VMStateDescription vmstate_nvic = {
