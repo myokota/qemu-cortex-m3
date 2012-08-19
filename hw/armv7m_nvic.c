@@ -16,6 +16,11 @@
 #include "exec-memory.h"
 
 #define NVIC 1
+#define SYSTICK_USES_PTIMER
+
+#ifdef SYSTICK_USES_PTIMER
+#include "ptimer.h"
+#endif
 
 static uint32_t nvic_readb(void *opaque, uint32_t offset);
 static uint32_t nvic_readl(void *opaque, uint32_t offset);
@@ -30,7 +35,11 @@ typedef struct {
         uint32_t control;
         uint32_t reload;
         int64_t tick;
+#ifdef SYSTICK_USES_PTIMER
+        ptimer_state *ptimer;
+#else
         QEMUTimer *timer;
+#endif
     } systick;
     uint32_t num_irq;
 } nvic_state;
@@ -56,10 +65,17 @@ static inline int64_t systick_scale(nvic_state *s)
 
 static void systick_reload(nvic_state *s, int reset)
 {
+#ifdef SYSTICK_USES_PTIMER
+    ptimer_stop(s->systick.ptimer);
+    ptimer_set_freq(s->systick.ptimer, systick_scale(s));
+    ptimer_set_limit(s->systick.ptimer, s->systick.reload, 0);
+    ptimer_run(s->systick.ptimer, 0);
+#else
     if (reset)
         s->systick.tick = qemu_get_clock_ns(vm_clock);
     s->systick.tick += (s->systick.reload + 1) * systick_scale(s);
     qemu_mod_timer(s->systick.timer, s->systick.tick);
+#endif
 }
 
 static void systick_timer_tick(void * opaque)
@@ -82,7 +98,11 @@ static void systick_reset(nvic_state *s)
     s->systick.control = 0;
     s->systick.reload = 0;
     s->systick.tick = 0;
+#ifdef SYSTICK_USES_PTIMER
+    ptimer_stop(s->systick.ptimer);
+#else
     qemu_del_timer(s->systick.timer);
+#endif
 }
 
 /* The external routines use the hardware vector numbering, ie. the first
@@ -155,6 +175,9 @@ static uint32_t nvic_readl(void *opaque, uint32_t offset)
     case 0x14: /* SysTick Reload Value.  */
         return s->systick.reload;
     case 0x18: /* SysTick Current Value.  */
+#ifdef SYSTICK_USES_PTIMER
+        return ptimer_get_count(s->systick.ptimer);
+#else
         {
             int64_t t;
             if ((s->systick.control & SYSTICK_ENABLE) == 0)
@@ -170,6 +193,7 @@ static uint32_t nvic_readl(void *opaque, uint32_t offset)
                 val = 0;
             return val;
         }
+#endif
     case 0x1c: /* SysTick Calibration Value.  */
 #if 0
         return 10000;
@@ -302,6 +326,11 @@ static void nvic_writel(void *opaque, uint32_t offset, uint32_t value)
         s->systick.control &= 0xfffffff8;
         s->systick.control |= value & 7;
         if ((oldval ^ value) & SYSTICK_ENABLE) {
+#ifdef SYSTICK_USES_PTIMER
+            if (value & SYSTICK_ENABLE) {
+                systick_reload(s, 1);
+            }
+#else
             int64_t now = qemu_get_clock_ns(vm_clock);
             if (value & SYSTICK_ENABLE) {
                 if (s->systick.tick) {
@@ -316,6 +345,7 @@ static void nvic_writel(void *opaque, uint32_t offset, uint32_t value)
                 if (s->systick.tick < 0)
                   s->systick.tick = 0;
             }
+#endif
         } else if ((oldval ^ value) & SYSTICK_CLKSOURCE) {
             /* This is a hack. Force the timer to be reloaded
                when the reference clock is changed.  */
@@ -326,7 +356,11 @@ static void nvic_writel(void *opaque, uint32_t offset, uint32_t value)
         s->systick.reload = value;
         break;
     case 0x18: /* SysTick Current Value.  Writes reload the timer.  */
+#ifdef SYSTICK_USES_PTIMER
+        ptimer_set_count(s->systick.ptimer, s->systick.reload - value);
+#else
         systick_reload(s, 1);
+#endif
         s->systick.control &= ~SYSTICK_COUNTFLAG;
         break;
     case 0xd04: /* Interrupt Control State.  */
@@ -437,7 +471,11 @@ static const VMStateDescription vmstate_nvic = {
         VMSTATE_UINT32(systick.control, nvic_state),
         VMSTATE_UINT32(systick.reload, nvic_state),
         VMSTATE_INT64(systick.tick, nvic_state),
+#ifdef SYSTICK_USES_PTIMER
+        VMSTATE_PTIMER(systick.ptimer, nvic_state),
+#else
         VMSTATE_TIMER(systick.timer, nvic_state),
+#endif
         VMSTATE_END_OF_LIST()
     }
 };
@@ -458,7 +496,12 @@ static int armv7m_nvic_init(SysBusDevice *dev)
     */
     gic_init(&s->gic, s->num_irq);
     memory_region_add_subregion(get_system_memory(), 0xe000e000, &s->gic.iomem);
+#ifdef SYSTICK_USES_PTIMER
+    s->systick.ptimer = ptimer_init(qemu_bh_new(systick_timer_tick, s));
+#else
     s->systick.timer = qemu_new_timer_ns(vm_clock, systick_timer_tick, s);
+#endif
+    vmstate_register(&dev->qdev, -1, &vmstate_nvic, s);
     return 0;
 }
 
