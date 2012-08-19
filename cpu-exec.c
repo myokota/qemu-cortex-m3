@@ -406,12 +406,19 @@ int cpu_exec(CPUArchState *env)
                        the stack if an interrupt occurred at the wrong time.
                        We avoid this by disabling interrupts when
                        pc contains a magic address.  */
-                    if (interrupt_request & CPU_INTERRUPT_HARD
-                        && ((IS_M(env) && env->regs[15] < 0xfffffff0)
-                            || !(env->uncached_cpsr & CPSR_I))) {
-                        env->exception_index = EXCP_IRQ;
-                        do_interrupt(env);
-                        next_tb = 0;
+                    if (interrupt_request & CPU_INTERRUPT_HARD) {
+                        if (IS_M(env)) {
+                            if (env->regs[15] < 0xfffffff0 
+                                && !(env->uncached_cpsr & (CPSR_I|CPSR_F))) {
+                                env->exception_index = EXCP_IRQ;
+                                do_interrupt(env);
+                                next_tb = 0;
+                            }
+                        } else if (!(env->uncached_cpsr & CPSR_I)) {
+                            env->exception_index = EXCP_IRQ;
+                            do_interrupt(env);
+                            next_tb = 0;
+                        }
                     }
 #elif defined(TARGET_UNICORE32)
                     if (interrupt_request & CPU_INTERRUPT_HARD
