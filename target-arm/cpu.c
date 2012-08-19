@@ -78,14 +78,11 @@ static void arm_cpu_reset(CPUState *s)
         env->cp15.c15_cpar = 1;
     }
 #else
-    /* SVC mode with interrupts disabled.  */
-    env->uncached_cpsr = ARM_CPU_MODE_SVC | CPSR_A | CPSR_F | CPSR_I;
-    /* On ARMv7-M the CPSR_I is the value of the PRIMASK register, and is
-       clear at reset.  Initial SP and PC are loaded from ROM.  */
+    /* On ARMv7-M status are cleared at reset and initial SP and PC are 
+     * loaded from ROM.  */
     if (IS_M(env)) {
         uint32_t pc;
         uint8_t *rom;
-        env->uncached_cpsr &= ~CPSR_I;
         rom = rom_ptr(0);
         if (rom) {
             /* We should really use ldl_phys here, in case the guest
@@ -97,6 +94,27 @@ static void arm_cpu_reset(CPUState *s)
             env->thumb = pc & 1;
             env->regs[15] = pc & ~1;
         }
+
+        /* preset to an illegal exception return value */
+        env->regs[14] = 0xffffffff;
+
+        /* The status bits are cleared, which are:
+              - Exception Number 
+              - IT/ICI bits 
+              - priority mask
+              - fault mask
+              - base priority 
+        and T bit set from vector */
+        env->uncached_cpsr = env->thumb? CPSR_T:0;
+        env->v7m.basepri = 0;
+
+        /* Current stack is Main, thread is privileged */
+        env->v7m.control = 0;
+        env->v7m.current_sp = 0;
+        env->v7m.other_sp = 0;
+    } else {
+        /* SVC mode with interrupts disabled.  */
+        env->uncached_cpsr = ARM_CPU_MODE_SVC | CPSR_A | CPSR_F | CPSR_I;
     }
     env->vfp.xregs[ARM_VFP_FPEXC] = 0;
     env->cp15.c2_base_mask = 0xffffc000u;
